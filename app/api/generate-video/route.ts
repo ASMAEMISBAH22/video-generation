@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import Runway from '@runwayml/sdk';
 
+// In-memory store for tracking video generation tasks
+let videoTasks: { [key: string]: any } = {};
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
@@ -30,34 +33,30 @@ export async function POST(request: Request) {
 
     console.log('Creating video generation task with Gen-4 Turbo...');
 
-    // Use the official SDK to create an image-to-video task with Gen-4 Turbo and wait for completion
-    const task = await runway.imageToVideo
-      .create({
-        model: 'gen4_turbo',
-        promptImage: base64Image,
-        promptText: promptText,
-        duration: 5,
-        ratio: '1280:720',
-      })
-      .waitForTaskOutput();
+    // Use the official SDK to create an image-to-video task with Gen-4 Turbo
+    const task = await runway.imageToVideo.create({
+      model: 'gen4_turbo',
+      promptImage: base64Image,
+      promptText: promptText,
+      duration: 5,
+      ratio: '1280:720',
+    });
 
-    console.log('Video generation completed!');
-    console.log('Task result:', task);
+    console.log('Task created successfully:', task.id);
 
-    // Extract the video URL from the completed task
-    const videoUrl = task.output && task.output.length > 0 
-      ? task.output[0] 
-      : null;
-
-    if (!videoUrl) {
-      throw new Error('No video URL found in completed task');
-    }
+    // Store task info for polling
+    videoTasks[task.id] = {
+      id: task.id,
+      status: 'pending',
+      progress: 0,
+      createdAt: new Date(),
+    };
 
     return NextResponse.json({
       success: true,
       taskId: task.id,
-      videoUrl: videoUrl,
-      message: 'Video generated successfully with Gen-4 Turbo!',
+      status: 'pending',
+      message: 'Gen-4 Turbo video generation started successfully.',
       model: 'gen4_turbo'
     });
 
@@ -101,15 +100,23 @@ export async function POST(request: Request) {
       }
 
       const data = await response.json();
-      console.log('Direct API succeeded, but polling not implemented for fallback');
+      console.log('Direct API succeeded:', data);
+
+      // Store task info for polling
+      videoTasks[data.id] = {
+        id: data.id,
+        status: data.status || 'pending',
+        progress: 0,
+        createdAt: new Date(),
+      };
 
       return NextResponse.json({
         success: true,
         taskId: data.id,
-        message: 'Gen-4 Turbo video generation started via direct API. Please check back later.',
+        status: data.status,
+        message: 'Gen-4 Turbo video generation started via direct API.',
         model: 'gen4_turbo',
-        fallback: true,
-        note: 'Polling not available with fallback method'
+        fallback: true
       });
 
     } catch (fallbackError) {
@@ -122,5 +129,74 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+  }
+}
+
+// GET endpoint to check task status
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const taskId = searchParams.get('taskId');
+
+    if (!taskId) {
+      return NextResponse.json({ error: 'Task ID is required' }, { status: 400 });
+    }
+
+    const apiKey = process.env.RUNWAY_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'RUNWAY_API_KEY is not configured' }, { status: 500 });
+    }
+
+    // Initialize Runway SDK
+    const runway = new Runway({
+      apiKey: apiKey,
+    });
+
+    // Use direct API call to check status
+    const response = await fetch(`https://api.dev.runwayml.com/v1/tasks/${taskId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'X-Runway-Version': '2024-11-06'
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Direct API status check failed:', errorText);
+      throw new Error(`API Error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('Direct API status check succeeded:', data);
+
+    // Update our local task store
+    if (videoTasks[taskId]) {
+      videoTasks[taskId].status = data.status;
+      videoTasks[taskId].progress = data.status === 'SUCCEEDED' ? 100 : 
+                                    data.status === 'FAILED' ? 0 : 50;
+      if (data.status === 'SUCCEEDED' && data.output) {
+        videoTasks[taskId].videoUrl = data.output;
+      }
+      if (data.status === 'FAILED' && data.error) {
+        videoTasks[taskId].error = data.error;
+      }
+    }
+
+    return NextResponse.json({
+      taskId: taskId,
+      status: data.status.toLowerCase(),
+      progress: data.status === 'SUCCEEDED' ? 100 : 
+               data.status === 'FAILED' ? 0 : 50,
+      videoUrl: data.status === 'SUCCEEDED' ? data.output : null,
+      error: data.status === 'FAILED' ? data.error : null,
+    });
+
+  } catch (error) {
+    console.error('Error checking task status:', error);
+    return NextResponse.json(
+      { error: 'Failed to check task status' },
+      { status: 500 }
+    );
   }
 }

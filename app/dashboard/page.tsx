@@ -55,29 +55,88 @@ export default function VideoGenerationDashboard() {
     formData.append('prompt', prompt);
 
     try {
-      // Simulate progress updates
+      // Start progress simulation
       const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 10, 90));
-      }, 1000);
+        setProgress(prev => Math.min(prev + 5, 90));
+      }, 2000);
 
+      // Start video generation
       const response = await fetch('/api/generate-video', {
         method: 'POST',
         body: formData,
       });
 
-      clearInterval(progressInterval);
-
       if (!response.ok) {
-        throw new Error('Failed to generate video');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate video');
       }
 
       const data = await response.json();
-      setProgress(100);
-      setGeneratedVideo(data.videoUrl);
-      setAnalysis(data.analysis);
+      
+      if (!data.taskId) {
+        throw new Error('No task ID received from video generation');
+      }
+
+      console.log('Video generation started with task ID:', data.taskId);
+
+      // Start polling for completion
+      let attempts = 0;
+      const maxAttempts = 60; // 5 minutes max (60 * 5 seconds)
+      
+      const pollStatus = async () => {
+        try {
+          attempts++;
+          
+          const statusResponse = await fetch(`/api/generate-video?taskId=${data.taskId}`);
+          
+          if (!statusResponse.ok) {
+            console.error('Failed to check status:', statusResponse.statusText);
+            return;
+          }
+
+          const statusData = await statusResponse.json();
+          console.log('Status check result:', statusData);
+
+          // Update progress based on status
+                     if (statusData.status === 'succeeded' || statusData.status === 'completed') {
+             clearInterval(progressInterval);
+             clearInterval(pollInterval);
+             setProgress(100);
+             setGenerating(false);
+             
+             if (statusData.videoUrl) {
+               setGeneratedVideo(statusData.videoUrl);
+               console.log('Video generation completed:', statusData.videoUrl);
+             } else {
+               throw new Error('Video generation completed but no video URL received');
+             }
+          } else if (statusData.status === 'failed') {
+            clearInterval(progressInterval);
+            clearInterval(pollInterval);
+            throw new Error(statusData.error || 'Video generation failed');
+          } else if (attempts >= maxAttempts) {
+            clearInterval(progressInterval);
+            clearInterval(pollInterval);
+            throw new Error('Video generation timed out after 5 minutes');
+          }
+          // Continue polling if status is pending/processing
+        } catch (pollError) {
+          console.error('Error during status polling:', pollError);
+          clearInterval(progressInterval);
+          clearInterval(pollInterval);
+          setError(pollError instanceof Error ? pollError.message : 'Error checking video status');
+          setGenerating(false);
+        }
+      };
+
+      // Poll every 5 seconds
+      const pollInterval = setInterval(pollStatus, 5000);
+      
+      // Initial status check
+      setTimeout(pollStatus, 2000);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
       setGenerating(false);
     }
   };
