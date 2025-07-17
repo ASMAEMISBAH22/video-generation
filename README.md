@@ -2,7 +2,7 @@
 
 A modern web application that transforms static images into dynamic videos using AI-powered video generation with Runway ML's Gen-4 Turbo model.
 
-![Video Generation Success](https://raw.githubusercontent.com/yourusername/ai-video-generator/main/demo-image.png)
+![Video Generation Success](https://raw.githubusercontent.com/ASMAEMISBAH22/video-generation/main/demo-image.png)
 
 ## ✨ Features
 
