@@ -1,4 +1,4 @@
-# AI Video Generation Dashboard
+# AI Video Generation Dashboard hjkl
 
 A modern web application that transforms static images into dynamic videos using AI-powered video generation with Runway ML's Gen-4 Turbo model.
 
